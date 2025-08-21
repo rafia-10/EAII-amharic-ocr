@@ -1,186 +1,21 @@
-
-
-import cv2
-import matplotlib.pyplot as plt
-import numpy as np
-from ultralytics import YOLO
-import torch
-import torch.nn as nn
 import os
 import shutil
+import cv2
+import numpy as np
+import torch
+import torch.nn as nn
+from ultralytics import YOLO
 
-CRNN_loc = 'best_crnn (1).pth'
-yolo_model = YOLO('best (4).pt')
-BW_img_loc = 'BW_read_img.jpg'
-cropped_imgs_loc = 'cropped_words'
+# ------------------------ CONFIG ------------------------
+CRNN_LOC = 'best_crnn (1).pth'
+YOLO_MODEL_PATH = 'best (4).pt'
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BASE_CROPPED_FOLDER = 'cropped_words'
+BW_IMG_LOC = 'BW_read_img.jpg'
+BLANK = 302
 
-def to_black_and_white(image_path, save_path=None, white_thresh=200):
-    """
-    Convert an image so that all non-white pixels become black (binary image).
-
-    Args:
-        image_path (str): Path to input image.
-        save_path (str, optional): Path to save the processed image.
-        white_thresh (int): Threshold for "white" (0–255).
-                            Higher = stricter (only pure white remains white).
-
-    Returns:
-        np.ndarray: Processed binary image.
-    """
-    # Read image
-    img = cv2.imread(image_path)
-
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Anything close to white stays white, everything else black
-    #_, bw = cv2.threshold(gray, white_thresh, 255, cv2.THRESH_BINARY)
-
-    if save_path:
-        cv2.imwrite(save_path, gray)
-
-    return gray
-
-
-def YOLO_Interface(image_path):
-    # 3. Load the image using OpenCV
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"Error: Could not load image from {image_path}")
-        exit()
-
-    # Convert BGR to RGB for consistent display with matplotlib later
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    display_image = image_rgb.copy() # Create a copy to draw on
-
-    # 4. Perform prediction (no drawing with .plot() here, just get raw results)
-    # We set save=False and show=False because we'll handle drawing manually
-    results = yolo_model.predict(source=image_path, conf=0.2, iou=0.2, save=False, show=False)
-    #results = yolo_model.predict(source=image_path, conf=0.6, iou=0.5, save=False, show=False)
-
-    # 5. Process results and draw boxes manually using OpenCV
-    for r in results:
-        if r.boxes: # Check if any bounding boxes were detected
-            for box in r.boxes:
-                # Get coordinates (xyxy format: xmin, ymin, xmax, ymax)
-                # .cpu().numpy() converts the tensor to a NumPy array on the CPU
-                x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-
-                # Get class ID and confidence
-                class_id = int(box.cls[0].cpu().numpy())
-                confidence = float(box.conf[0].cpu().numpy())
-                class_name = yolo_model.names[class_id]
-
-
-                color = (0, 255, 0)
-                if yolo_model.task == 'segment': # Example: different color for segmentation if applicable
-                    color = (255, 0, 255) # Magenta
-
-                cv2.rectangle(display_image, (x1, y1), (x2, y2), color, 2)
-
-                # Create the label text
-                label = f"{class_name} {confidence:.2f}"
-
-                # Calculate text size and position to avoid overlap
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.7
-                font_thickness = 2
-                text_size = cv2.getTextSize(label, font, font_scale, font_thickness)[0]
-
-                # Position text above the box, or inside if space is limited
-                text_x = x1
-                text_y = y1 - 10 # 10 pixels above the top of the box
-
-                # Ensure text is not off-image at the top
-                if text_y < 0:
-                    text_y = y1 + text_size[1] + 10 # Place below if not enough space above
-
-                # Draw background rectangle for text for better readability
-                text_bg_color = (0, 0, 0) # Black background
-                #cv2.rectangle(display_image, (text_x, text_y - text_size[1] - 5), # top-left
-                 #             (text_x + text_size[0] + 5, text_y + 5), # bottom-right
-                  #            text_bg_color, -1) # -1 fills the rectangle
-
-                #cv2.putText(display_image, label, (text_x + 2, text_y), font,
-                 #           font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA) # White text
-
-    # 6. Display the annotated image using Matplotlib
-    plt.figure(figsize=(12, 10)) # Adjust figure size for better viewing
-    plt.imshow(display_image)
-    plt.axis('off') # Hide axes
-    plt.title('Model Prediction with Custom Labels')
-    plt.show()
-
-
-def YOLO_cropper(image_path, output_folder="cropped_words", row_tolerance=0.6):
-    """
-    Detect words in an image using YOLO, crop them, and save in left-to-right, top-to-bottom order.
-    Groups words into rows based on median y-center positions.
-
-    Args:
-        image_path (str): Path to input image.
-        output_folder (str): Folder where crops will be saved.
-        row_tolerance (float): Fraction of box height allowed for row grouping (default 0.6).
-        visualize (bool): Save an annotated image with reading order numbers.
-
-    Returns:
-        list: File paths to cropped word images in reading order.
-    """
-    os.makedirs(output_folder, exist_ok=True)
-
-    results = yolo_model.predict(source=image_path, conf=0.25, iou=0.5, save=False, show=False)
-    boxes = results[0].boxes.xyxy.cpu().numpy()
-
-    if len(boxes) == 0:
-        print("⚠️ No boxes detected.")
-        return []
-
-    # Convert boxes → (x1, y1, x2, y2, y_center, height)
-    crops_info = []
-    for x1, y1, x2, y2 in boxes:
-        h = y2 - y1
-        yc = (y1 + y2) / 2
-        crops_info.append((int(x1), int(y1), int(x2), int(y2), yc, h))
-
-    # Step 1: sort by y_center
-    crops_info.sort(key=lambda b: b[4])
-
-    # Step 2: group into rows using median row height
-    rows = []
-    current_row = [crops_info[0]]
-    for box in crops_info[1:]:
-        x1, y1, x2, y2, yc, h = box
-        _, _, _, _, yc_ref, h_ref = current_row[0]
-
-        # Use median y_center of current row as reference
-        row_yc = np.median([b[4] for b in current_row])
-        row_h = np.median([b[5] for b in current_row])
-
-        if abs(yc - row_yc) <= row_tolerance * row_h:
-            current_row.append(box)
-        else:
-            rows.append(current_row)
-            current_row = [box]
-    rows.append(current_row)
-
-    # Step 3: sort each row left-to-right
-    for row in rows:
-        row.sort(key=lambda b: b[0])
-
-    # Step 4: flatten rows top-to-bottom
-    ordered_boxes = [b for row in rows for b in row]
-
-    # Step 5: crop and save
-    image = cv2.imread(image_path)
-    saved_paths = []
-    for idx, (x1, y1, x2, y2, _, _) in enumerate(ordered_boxes, start=1):
-        crop = image[y1:y2, x1:x2]
-        save_path = os.path.join(output_folder, f"word_{idx}.jpg")
-        cv2.imwrite(save_path, crop)
-        saved_paths.append(save_path)
-
-    print(f"✅ Saved {len(saved_paths)} crops in reading order to '{output_folder}'")
-    return saved_paths
+# ------------------------ LOAD MODELS ------------------------
+yolo_model = YOLO(YOLO_MODEL_PATH)
 
 class CRNN(nn.Module):
     def __init__(self, imgH, nc, nclass, nh):
@@ -207,44 +42,12 @@ class CRNN(nn.Module):
         output = self.fc(recurrent)
         return output.permute(1, 0, 2)
 
-# Device
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+CRNN_MODEL = CRNN(imgH=32, nc=1, nclass=303, nh=256).to(DEVICE)
+checkpoint = torch.load(CRNN_LOC, map_location=DEVICE)
+CRNN_MODEL.load_state_dict(checkpoint)
+CRNN_MODEL.eval()
 
-# Recreate model with same hyperparameters
-CRNN_model = CRNN(imgH=32, nc=1, nclass= 303, nh=256).to(DEVICE)
-
-# Load weights
-checkpoint = torch.load(CRNN_loc, map_location=DEVICE)
-CRNN_model.load_state_dict(checkpoint)
-
-CRNN_model.eval()
-print("Model loaded and ready!")
-
-def preprocess_image(img_path):
-    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-    print(img.shape)
-    h, w, _ = img.shape
-    new_w = max(int(32 * (w / h)), 32)
-    img = cv2.resize(img, (new_w, 32))
-    img = (img / 255.0).astype(np.float32)
-    img = (img - 0.5) / 0.5  # normalize
-    img = torch.from_numpy(img).unsqueeze(0).unsqueeze(0)  # [B,C,H,W]
-    return img.to(DEVICE)
-
-BLANK = 302
-def ctc_greedy_decoder(output, idx_to_char, blank=BLANK):
-    # output: [B, T, nclass]
-    preds = output.softmax(2).argmax(2)  # [B, T]
-    preds = preds[0].cpu().numpy().tolist()
-
-    decoded = []
-    prev = -1
-    for p in preds:
-        if p != prev and p != blank:  # collapse repeats, ignore blanks
-            decoded.append(idx_to_char.get(p, "�"))
-        prev = p
-    return "".join(decoded)
-
+# ------------------------ AMHARIC MAPPING ------------------------
 amharic_mapping = {
     # Basic consonants + vowels
     0: 'ሀ', 1: 'ሁ', 2: 'ሂ', 3: 'ሃ', 4: 'ሄ', 5: 'ህ', 6: 'ሆ',
@@ -284,70 +87,111 @@ amharic_mapping = {
 
     # Special characters / punctuation / numbers
     269: "!", 270: ":-", 271: "<", 272: "(", 273: "«", 274: "፥", 275: "%", 276: "»", 277: ")",
-    278: ">", 279: ".", 280: "+", 281: "፣", 282: "-", 283: "።", 284: "/",
-    285: "0", 286: "1", 287: "2", 288: "3", 289: "4", 290: "5", 291: "6", 292: "7", 293: "8", 294: "9",
+    278: ">", 279: ".", 280: "+", 281: "፣", 282: "-", 283: "።", 284: "/", 
+    285: "0", 286: "1", 287: "2", 288: "3", 289: "4", 290: "5", 291: "6", 292: "7", 293: "8", 294: "9", 
     295: "፡", 296: "፤", 297: "...", 298: "*", 299: "#", 300: "?"
 }
 
+# ------------------------ UTILITIES ------------------------
+def to_black_and_white(image_path, save_path=None, white_thresh=200):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, bw = cv2.threshold(gray, white_thresh, 255, cv2.THRESH_BINARY)
+    if save_path:
+        cv2.imwrite(save_path, bw)
+    return bw
+
+def preprocess_image(img_path):
+    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(f"Cannot read {img_path}")
+    h, w = img.shape
+    new_w = max(int(32 * (w / h)), 32)
+    img = cv2.resize(img, (new_w, 32))
+    img = ((img / 255.0) - 0.5) / 0.5
+    img = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).float().to(DEVICE)
+    return img
+
+def ctc_greedy_decoder(output, idx_to_char, blank=BLANK):
+    preds = output.softmax(2).argmax(2)[0].cpu().numpy().tolist()
+    decoded = []
+    prev = -1
+    for p in preds:
+        if p != prev and p != blank:
+            decoded.append(idx_to_char.get(p, "�"))
+        prev = p
+    return "".join(decoded)
+
 def CNNR_Interface(img_path):
     img = preprocess_image(img_path)
-    ig = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-    #plt.imshow(ig)
-    #plt.axis('off') # Turn off axis labels and ticks
-    #plt.title(img_path)
-    #plt.show()
     with torch.no_grad():
-        output = CRNN_model(img)  # [B, T, nclass]
-
-    predicted_text = ctc_greedy_decoder(output, amharic_mapping, blank=BLANK)
-    print("Predicted:", predicted_text)
-    return predicted_text
+        output = CRNN_MODEL(img)
+    return ctc_greedy_decoder(output, AMHARIC_MAPPING, blank=BLANK)
 
 def clear_folder(folder_path):
-    """
-    Ensures the folder exists, then deletes all files and subdirectories inside it.
-
-    Args:
-        folder_path (str): Path to the folder to clear.
-    """
-    # Create folder if it does not exist
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-        print(f"📁 Created folder '{folder_path}'")
-        return
-
-    # Clear existing contents
-    for filename in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, filename)
+    os.makedirs(folder_path, exist_ok=True)
+    for f in os.listdir(folder_path):
+        path = os.path.join(folder_path, f)
         try:
-            if os.path.isfile(file_path) or os.path.islink(file_path):
-                os.remove(file_path)  # Remove file or symlink
-            elif os.path.isdir(file_path):
-                shutil.rmtree(file_path)  # Remove subdirectory
+            if os.path.isfile(path) or os.path.islink(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
         except Exception as e:
-            print(f"⚠️ Failed to delete {file_path}. Reason: {e}")
+            print(f"⚠️ Failed to delete {path}: {e}")
 
-    print(f"✅ Cleared all contents in '{folder_path}'")
+def YOLO_cropper(image_path, output_folder, row_tolerance=0.6):
+    os.makedirs(output_folder, exist_ok=True)
+    results = yolo_model.predict(source=image_path, conf=0.25, iou=0.5, save=False, show=False)
+    boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 else []
+    if len(boxes) == 0:
+        return []
 
-def pipeline(img_path, bw = False):
-    to_black_and_white(image_path=img_path, save_path= BW_img_loc)
-    detected_text = ''
-    path = img_path
+    crops_info = [(int(x1), int(y1), int(x2), int(y2), (y1+y2)/2, y2-y1) for x1, y1, x2, y2 in boxes]
+    crops_info.sort(key=lambda b: b[4])
+
+    # Group into rows
+    rows, current_row = [], [crops_info[0]]
+    for box in crops_info[1:]:
+        row_yc = np.median([b[4] for b in current_row])
+        row_h = np.median([b[5] for b in current_row])
+        if abs(box[4] - row_yc) <= row_tolerance * row_h:
+            current_row.append(box)
+        else:
+            rows.append(current_row)
+            current_row = [box]
+    rows.append(current_row)
+    for row in rows:
+        row.sort(key=lambda b: b[0])
+    ordered_boxes = [b for row in rows for b in row]
+
+    saved_paths = []
+    for idx, (x1, y1, x2, y2, _, _) in enumerate(ordered_boxes, start=1):
+        crop = cv2.imread(image_path)[y1:y2, x1:x2]
+        save_path = os.path.join(output_folder, f"word_{idx}.jpg")
+        cv2.imwrite(save_path, crop)
+        saved_paths.append(save_path)
+    return saved_paths
+
+# ------------------------ PIPELINE ------------------------
+def pipeline(img_path, user_id=None, bw=True):
+    cropped_folder = os.path.join(BASE_CROPPED_FOLDER, str(user_id or "default"))
     if bw:
-      path = BW_img_loc
-    clear_folder(cropped_imgs_loc)
-    print('done cleaning')
-    YOLO_Interface(path)
-    print('done locating')
-    locs = YOLO_cropper(path)
-    print('done cropping')
-    print(locs)
-    if len(locs) == 0:
-        return detected_text
+        to_black_and_white(img_path, save_path=BW_IMG_LOC)
+        img_path_to_use = BW_IMG_LOC
+    else:
+        img_path_to_use = img_path
+
+    clear_folder(cropped_folder)
+    locs = YOLO_cropper(img_path_to_use, cropped_folder)
+    if not locs:
+        return "❌ No text detected."
+
+    detected_text = ''
     for loc in locs:
-        print(loc)
-        detected_text += ' '+CNNR_Interface(loc)
+        detected_text += ' ' + CNNR_Interface(loc)
+    return detected_text.strip()
 
-    return detected_text
-
-print(pipeline('sample.jpg', bw=True))
+# ------------------------ TEST ------------------------
+if __name__ == "__main__":
+    print(pipeline('sample.jpg', user_id="test", bw=True))
