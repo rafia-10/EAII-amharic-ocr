@@ -3,7 +3,7 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters, C
 import os
 from OCR import pipeline   # <-- import your pipeline function
 
-TOKEN = "8283056976:AAHUng7KPhGV3231Kk8rA2tJEPFrBlG1YME"
+TOKEN = os.environ["TELEGRAM_TOKEN"]
 
 # ---- Bot Handlers ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
