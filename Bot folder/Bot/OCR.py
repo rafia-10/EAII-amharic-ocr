@@ -142,7 +142,7 @@ def clear_folder(folder_path):
 
 def YOLO_cropper(image_path, output_folder, row_tolerance=0.6):
     os.makedirs(output_folder, exist_ok=True)
-    results = yolo_model.predict(source=image_path, conf=0.25, iou=0.5, save=False, show=False)
+    results = yolo_model.predict(source=image_path, conf=0.2, iou=0.2, save=False, show=False)
     boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 else []
     if len(boxes) == 0:
         return []
