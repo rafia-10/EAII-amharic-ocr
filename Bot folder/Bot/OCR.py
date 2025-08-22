@@ -8,7 +8,7 @@ from ultralytics import YOLO
 
 # ------------------------ CONFIG ------------------------
 CRNN_LOC = 'best_crnn (1).pth'
-YOLO_MODEL_PATH = 'best (4).pt'
+YOLO_MODEL_PATH = 'best.pt'
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BASE_CROPPED_FOLDER = 'cropped_words'
 BW_IMG_LOC = 'BW_read_img.jpg'
