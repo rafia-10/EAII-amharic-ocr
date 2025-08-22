@@ -2,7 +2,11 @@ python-telegram-bot==20.3
 opencv-python==4.8.1.78
 matplotlib==3.8.0
 numpy==1.26.0
-torch==2.1.0
-torchaudio==2.1.0
-torchvision==0.16.0
+
+# Torch stack compatible with Python 3.11
+torch==2.2.2
+torchvision==0.17.2
+torchaudio==2.2.2
+
 ultralytics==8.0.152
+
