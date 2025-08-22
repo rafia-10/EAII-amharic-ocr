@@ -2,4 +2,6 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "python Telegram_bot.py"
+startCommand = "python3 Telegram_bot.py"
+
+
